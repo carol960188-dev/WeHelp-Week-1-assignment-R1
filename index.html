@@ -286,7 +286,7 @@
 
 
 <script>
-// ===== Task 3 – 最終穩定版 =====
+// ===== Task 3：用 serial 對應圖片（A: name+serial、B: serial+pics） =====
 const ENDPOINTS_PAIRS = [
   [
     "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
@@ -298,27 +298,26 @@ const ENDPOINTS_PAIRS = [
   ],
 ];
 
-// ---- 讀檔並還原成陣列（rows 也支援），清除 BOM ----
+// 讀檔→陣列（支援 rows），清 BOM
 async function fetchToArray(url){
   const res = await fetch(url, { cache:"no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const txt = (await res.text()).replace(/^\uFEFF/,'').trim();
-  let json;
-  try { json = JSON.parse(txt); }
+  let json; try { json = JSON.parse(txt); }
   catch { throw new Error("JSON parse 失敗（前80字）：" + txt.slice(0,80)); }
   if (Array.isArray(json)) return json;
-  if (json && Array.isArray(json.rows)) return json.rows;
+  if (json?.rows && Array.isArray(json.rows)) return json.rows;
   throw new Error("未知格式 keys=" + Object.keys(json).join(","));
 }
 
-// ---- 一次抓兩個來源；一組失敗就試下一組 ----
+// 一組失敗就試下一組
 async function loadPair(){
   let lastErr;
   for (const pair of ENDPOINTS_PAIRS){
     try{
       const [A,B] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
       console.log("✅ 成功來源：", pair[0], "與", pair[1], "各", A.length, B.length);
-      return {A,B, src: pair};
+      return {A,B};
     }catch(e){
       console.warn("⚠️ 來源失敗，改試下一組：", e.message);
       lastErr = e;
@@ -327,85 +326,58 @@ async function loadPair(){
   throw lastErr || new Error("無可用來源");
 }
 
-// ---- 名稱與圖片抽取工具 ----
-const getName = (raw) => {
-  const n = (raw?.sname ?? raw?.stitle ?? raw?.title ?? raw?.name ?? "").toString().trim();
-  return n || null;
-};
-function firstImageFromList(str){
-  if (typeof str !== "string" || !str) return null;
-  // 可能逗號/分號分隔；挑第一個圖檔
-  const parts = str.split(/[,;]\s*/);
-  const hit = parts.find(p => /\.(jpg|jpeg|png)(\?|#|$)/i.test(p));
-  if (!hit) return null;
-  return hit.trim().replace(/^http:\/\//i, "https://");
-}
-// 萬一沒有 filelist/files，就掃描所有字串欄位
-function firstImageFromAny(raw){
-  for (const k in raw){
-    const v = raw[k];
-    if (typeof v === "string"){
-      const m = v.match(/https?:\/\/[^\s'";)]+?\.(jpg|jpeg|png)(\?[^\s'"]*)?/i);
-      if (m) return m[0].replace(/^http:\/\//i, "https://");
-    }
-  }
-  return null;
+// 取首圖（http→https）
+function pickFirstPic(pics){
+  // B.pics 可能是陣列、或逗號/分號分隔的字串、或單一字串
+  let list = [];
+  if (Array.isArray(pics)) list = pics;
+  else if (typeof pics === "string") list = pics.split(/[,;]\s*/);
+  const first = list.find(p => /\.(jpg|jpeg|png)(\?|#|$)/i.test(p));
+  if (!first) return null;
+  return first.trim().replace(/^http:\/\//i, "https://");
 }
 
-// ---- 從陣列建立「名稱→圖片」對照表（大小寫、空白正規化）----
-const normKey = (s) => s ? s.trim().toLowerCase() : "";
-function buildImageMap(arr){
+// 用 B 建「serial → 圖片」對照表
+function buildPicMap(B){
   const map = new Map();
-  for(const r of arr){
-    const name = getName(r);
-    if (!name) continue;
-    let img = firstImageFromList(r.filelist || r.files || "");
-    if (!img) img = firstImageFromAny(r);
-    if (img && !map.has(normKey(name))) {
-      map.set(normKey(name), img);
-    }
+  for (const r of B){
+    const serial = String(r.serial ?? "").trim();
+    if (!serial || map.has(serial)) continue;
+    const img = pickFirstPic(r.pics);
+    if (img) map.set(serial, img);
   }
   return map;
 }
 
-// ---- 合併 A/B：優先使用有圖片的對照表，把圖片套回只有名稱的那份 ----
-function mergeByName(A,B){
-  const imgMapB = buildImageMap(B);
-  const imgMapA = buildImageMap(A);
-  const imgMap = new Map([...imgMapB, ...imgMapA]); // 先 B 後 A
+// 合併：A 提供 name+serial，B 提供 serial→pic
+function mergeItems(A,B){
+  const picMap = buildPicMap(B);
+  const items = [];
+  const seen = new Set(); // 去重：同名只留一次
 
-  const seen = new Set();
-  const out = [];
-
-  // 先推 B（通常圖比較多）
-  for (const r of B){
-    const name = getName(r);
-    if (!name) continue;
-    const key = normKey(name);
-    if (seen.has(key)) continue;
-    let img = firstImageFromList(r.filelist || r.files || "") || imgMap.get(key);
-    if (!img) img = firstImageFromAny(r);
-    if (!img) img = `https://picsum.photos/seed/tt-${out.length+1}/800/600`;
-    out.push({ name, firstImage: img });
-    seen.add(key);
-  }
-
-  // 再補 A（避免重複）
   for (const r of A){
-    const name = getName(r);
-    if (!name) continue;
-    const key = normKey(name);
-    if (seen.has(key)) continue;
-    let img = firstImageFromList(r.filelist || r.files || "") || imgMap.get(key);
-    if (!img) img = firstImageFromAny(r);
-    if (!img) img = `https://picsum.photos/seed/tt-${out.length+1}/800/600`;
-    out.push({ name, firstImage: img });
-    seen.add(key);
+    const name = String(r.sname ?? r.stitle ?? r.title ?? r.name ?? "").trim() || null;
+    if (!name || seen.has(name)) continue;
+    const serial = String(r.serial ?? "").trim();
+    // 先用 serial 對應圖片；再保底掃字串欄位；最後 picsum 佔位
+    let firstImage = picMap.get(serial) || null;
+    if (!firstImage){
+      // 保險：掃 A 內可能藏圖的字串欄位
+      for (const k in r){
+        if (typeof r[k] === "string"){
+          const m = r[k].match(/https?:\/\/[^\s'";)]+?\.(jpg|jpeg|png)(\?[^\s'"]*)?/i);
+          if (m){ firstImage = m[0].replace(/^http:\/\//i,"https://"); break; }
+        }
+      }
+    }
+    if (!firstImage) firstImage = `https://picsum.photos/seed/tt-${items.length+1}/800/600`;
+    items.push({ name, firstImage });
+    seen.add(name);
   }
-  return out;
+  return items;
 }
 
-// ---- DOM 渲染（沿用你的結構）----
+// DOM（沿用你的結構）
 function clearChildren(node){ while(node.firstChild) node.removeChild(node.firstChild); }
 function renderBars(items){
   ["bar1","bar2","bar3"].forEach((id,i)=>{
@@ -431,26 +403,28 @@ function renderBlocks(items){
   });
 }
 
-// ---- 主流程 ----
+// 主流程
 document.addEventListener("DOMContentLoaded", async ()=>{
   try{
     console.log("⏳ 載入台北景點資料中…");
-    const {A,B,src} = await loadPair();
+    const {A,B} = await loadPair();
     console.log("🔎 A[0] keys:", Object.keys(A[0]||{}));
-    console.log("🔎 B[0] keys:", Object.keys(B[0]||{}));
+    console.log("🔎 B[0] keys:", Object.keys(B[0]||{})); // 你這裡是 ['serial','pics']
 
-    const items = mergeByName(A,B);
-    window.__norm = items;  // 方便 Console 檢查
-    console.log("📦 合併後筆數：", items.length, " 來源：", src);
+    const items = mergeItems(A,B);
+    window.__norm = items; // 方便驗證
+    console.log("📦 合併後筆數：", items.length);
+    console.log("🔍 例：", items.slice(0,5));
 
     renderBars(items.slice(0,3));
     renderBlocks(items.slice(3,13));
-    console.log("🎉 渲染完成。示例：", items.slice(0,5));
+    console.log("🎉 渲染完成");
   }catch(e){
     console.error("❌ 載入/解析失敗：", e);
   }
 });
 </script>
+
 
  
 </body>
