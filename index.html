@@ -286,143 +286,94 @@
 
 
 <script>
-// ===== Task 3：用 serial 對應圖片（A: name+serial、B: serial+pics） =====
-const ENDPOINTS_PAIRS = [
-  [
-    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
-    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-2",
-  ],
-  [
-    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-1",
-    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-2",
-  ],
-];
 
-// 讀檔→陣列（支援 rows），清 BOM
+// —— 1) 抓來源（直接用 jsDelivr）——
 async function fetchToArray(url){
-  const res = await fetch(url, { cache:"no-store" });
-  if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  const res = await fetch(url, {cache:'no-store'});
   const txt = (await res.text()).replace(/^\uFEFF/,'').trim();
-  let json; try { json = JSON.parse(txt); }
-  catch { throw new Error("JSON parse 失敗（前80字）：" + txt.slice(0,80)); }
+  const json = JSON.parse(txt);
   if (Array.isArray(json)) return json;
   if (json?.rows && Array.isArray(json.rows)) return json.rows;
-  throw new Error("未知格式 keys=" + Object.keys(json).join(","));
+  throw new Error('未知格式');
+}
+async function loadAB(){
+  const A = await fetchToArray("https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1");
+  const B = await fetchToArray("https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-2");
+  return {A,B};
 }
 
-// 一組失敗就試下一組
-async function loadPair(){
-  let lastErr;
-  for (const pair of ENDPOINTS_PAIRS){
-    try{
-      const [A,B] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
-      console.log("✅ 成功來源：", pair[0], "與", pair[1], "各", A.length, B.length);
-      return {A,B};
-    }catch(e){
-      console.warn("⚠️ 來源失敗，改試下一組：", e.message);
-      lastErr = e;
-    }
+// —— 2) 取第一張圖（支援 http/https 與 /d_upload_ttn/ 相對路徑 & 黏在一起）——
+function firstPic(pics){
+  // 絕對網址優先
+  const abs = String(pics||'').match(/https?:\/\/[^\s'"]+?\.(jpg|jpeg|png)(\?[^\s'"]*)?/i);
+  if (abs) return abs[0].replace(/^http:\/\//i,'https://');
+  // 相對路徑
+  const rel = String(pics||'').match(/\/d_upload_ttn\/[^\s'")]+?\.(jpg|jpeg|png)/i);
+  if (rel) return 'https://www.travel.taipei' + rel[0];
+  // 黏在一起的相對路徑，切第一段
+  const chunks = String(pics||'').split('/d_upload_ttn/').filter(Boolean);
+  if (chunks.length){
+    const take = chunks[0].match(/^[^\s'")]+?\.(jpg|jpeg|png)/i);
+    if (take) return 'https://www.travel.taipei/d_upload_ttn/' + take[0];
   }
-  throw lastErr || new Error("無可用來源");
+  return null;
 }
 
-// 取首圖（http→https）
-function pickFirstPic(pics){
-  // B.pics 可能是陣列、或逗號/分號分隔的字串、或單一字串
-  let list = [];
-  if (Array.isArray(pics)) list = pics;
-  else if (typeof pics === "string") list = pics.split(/[,;]\s*/);
-  const first = list.find(p => /\.(jpg|jpeg|png)(\?|#|$)/i.test(p));
-  if (!first) return null;
-  return first.trim().replace(/^http:\/\//i, "https://");
-}
-
-// 用 B 建「serial → 圖片」對照表
+// —— 3) B→建立 serial→img 對照表；A→用 serial 對應 —— 
 function buildPicMap(B){
   const map = new Map();
   for (const r of B){
-    const serial = String(r.serial ?? "").trim();
+    const serial = String(r.serial ?? '').trim();
     if (!serial || map.has(serial)) continue;
-    const img = pickFirstPic(r.pics);
+    const img = firstPic(r.pics);
     if (img) map.set(serial, img);
   }
   return map;
 }
-
-// 合併：A 提供 name+serial，B 提供 serial→pic
 function mergeItems(A,B){
   const picMap = buildPicMap(B);
-  const items = [];
-  const seen = new Set(); // 去重：同名只留一次
-
+  const out = [];
+  const seen = new Set();
   for (const r of A){
-    const name = String(r.sname ?? r.stitle ?? r.title ?? r.name ?? "").trim() || null;
+    const name = String(r.sname ?? r.stitle ?? r.title ?? r.name ?? '').trim();
     if (!name || seen.has(name)) continue;
-    const serial = String(r.serial ?? "").trim();
-    // 先用 serial 對應圖片；再保底掃字串欄位；最後 picsum 佔位
-    let firstImage = picMap.get(serial) || null;
-    if (!firstImage){
-      // 保險：掃 A 內可能藏圖的字串欄位
+    const serial = String(r.serial ?? '').trim();
+    let img = picMap.get(serial) || null;
+
+    // 備援：掃 A 的字串欄位抓圖
+    if (!img){
       for (const k in r){
-        if (typeof r[k] === "string"){
-          const m = r[k].match(/https?:\/\/[^\s'";)]+?\.(jpg|jpeg|png)(\?[^\s'"]*)?/i);
-          if (m){ firstImage = m[0].replace(/^http:\/\//i,"https://"); break; }
+        if (typeof r[k] === 'string'){
+          const hit = firstPic(r[k]);
+          if (hit){ img = hit; break; }
         }
       }
     }
-    if (!firstImage) firstImage = `https://picsum.photos/seed/tt-${items.length+1}/800/600`;
-    items.push({ name, firstImage });
+    if (!img) img = `https://picsum.photos/seed/tt-${out.length+1}/800/600`;
+    out.push({name, firstImage: img});
     seen.add(name);
   }
-  return items;
+  return out;
 }
 
-// DOM（沿用你的結構）
-function clearChildren(node){ while(node.firstChild) node.removeChild(node.firstChild); }
-function renderBars(items){
-  ["bar1","bar2","bar3"].forEach((id,i)=>{
-    const el = document.getElementById(id); if(!el) return;
-    const img = el.querySelector("img");
-    const title = el.querySelector(".bar-title");
-    const d = items[i]; if(!d) return;
-    if (img && d.firstImage) img.src = d.firstImage;
-    if (title) title.textContent = d.name || `景點 ${i+1}`;
-  });
-}
-function renderBlocks(items){
-  const root = document.querySelector(".blocks"); if(!root || !items?.length) return;
-  clearChildren(root);
-  items.forEach((d,i)=>{
-    const card = document.createElement("div"); card.className="card";
-    const bg = document.createElement("div"); bg.className="card-bg";
-    if (d.firstImage) bg.style.backgroundImage = `url('${d.firstImage}')`;
-    const star = document.createElement("div"); star.className="star"; star.setAttribute("data-active","false");
-    const cap = document.createElement("div"); cap.className="caption"; cap.textContent = d.name || `景點 ${i+1}`;
-    card.appendChild(bg); card.appendChild(star); card.appendChild(cap);
-    root.appendChild(card);
-  });
-}
+// —— 4) 主流程：重建 __norm 並渲染 —— 
+(async () => {
+  const {A,B} = await loadAB();
+  const items = mergeItems(A,B);
+  window.__norm = items;
 
-// 主流程
-document.addEventListener("DOMContentLoaded", async ()=>{
-  try{
-    console.log("⏳ 載入台北景點資料中…");
-    const {A,B} = await loadPair();
-    console.log("🔎 A[0] keys:", Object.keys(A[0]||{}));
-    console.log("🔎 B[0] keys:", Object.keys(B[0]||{})); // 你這裡是 ['serial','pics']
+  // 你頁面已有 renderBars/renderBlocks，直接用
+  renderBars(items.slice(0,3));
+  renderBlocks(items.slice(3,13));
 
-    const items = mergeItems(A,B);
-    window.__norm = items; // 方便驗證
-    console.log("📦 合併後筆數：", items.length);
-    console.log("🔍 例：", items.slice(0,5));
+  // 驗證
+  const real = items.filter(x => x.firstImage.startsWith('https://www.travel.taipei/')).length;
+  console.log('✅ 重渲染完成：總筆數', items.length, '，travel.taipei 圖片筆數', real);
+  console.log('🔎 前5筆：', items.slice(0,5));
+})();
 
-    renderBars(items.slice(0,3));
-    renderBlocks(items.slice(3,13));
-    console.log("🎉 渲染完成");
-  }catch(e){
-    console.error("❌ 載入/解析失敗：", e);
-  }
-});
+
+  
 </script>
 
 
