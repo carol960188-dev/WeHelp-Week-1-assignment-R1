@@ -329,22 +329,25 @@ async function loadWithFallback(){
   throw lastErr || new Error("無可用來源");
 }
 
-// 取第一張圖（從 filelist/連續網址抓第一個 .jpg/.png）
 function pickFirstImage(str){
-  if(typeof str!=="string") return null;
-  const m = str.match(/https?:\/\/[^\s'";]+?\.(?:jpg|jpeg|png)/i);
-  return m ? m[0] : null;
+  if (typeof str !== "string") return null;
+  // 抓第一個 .jpg/.jpeg/.png
+  const m = str.match(/https?:\/\/[^\s'";)]+?\.(?:jpg|jpeg|png)/i);
+  if (!m) return null;
+  // 升級 http → https，避免混合內容
+  let url = m[0].replace(/^http:\/\//i, "https://");
+  // 去除可能收尾的逗號/分號/括號等殘渣
+  url = url.replace(/[),;]+$/, "");
+  try { url = new URL(url).toString(); } catch {}
+  return url;
 }
 
-// 正規化：盡可能抓到 name 與 image
-function normalizeItem(raw){
-  const name =
-    (raw.stitle ?? raw.title ?? raw.name ?? raw.SName ?? raw.Name ?? raw.名稱 ?? "")
-      .toString().trim();
-
+  function normalizeItem(raw){
+  const name = (raw.stitle ?? raw.title ?? raw.name ?? "").toString().trim();
   let firstImage = null;
-  if (raw.filelist)      firstImage = pickFirstImage(raw.filelist);
-  else if (raw.files)    firstImage = pickFirstImage(String(raw.files));
+  if (raw.filelist) firstImage = pickFirstImage(raw.filelist);
+  else if (raw.files) firstImage = pickFirstImage(String(raw.files));
+  
   if (!firstImage){
     for (const k in raw){
       if (typeof raw[k] === "string"){
@@ -355,6 +358,8 @@ function normalizeItem(raw){
   }
   return { name, firstImage };
 }
+
+
 
 // 清空
 function clearChildren(node){ while(node.firstChild) node.removeChild(node.firstChild); }
