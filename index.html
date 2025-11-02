@@ -335,22 +335,36 @@ async function loadWithFallback(){
 }
 
 // 從長字串中挑第一張圖片（.jpg/.png）
+
+
+
 function pickFirstImageFromFilelist(str){
   if (typeof str !== "string") return null;
-  // filelist 可能是「URL URL URL...」或分號/空白分隔
+  // 取第一個 .jpg/.jpeg/.png（不含引號與分號）
   const m = str.match(/https?:\/\/[^\s'";]+?\.(?:jpg|jpeg|png)/i);
   return m ? m[0] : null;
 }
 
+
+
+  
 // 正規化 -> { name, firstImage }
 function normalizeItem(raw){
-  const name = raw.stitle || raw.title || raw.name || "";
-  // 作業提供的資料多半用 filelist 存圖片清單
+  // 優先順序：stitle（台北景點常用）→ title → name → 其他可能欄位
+  const name =
+    (raw.stitle ?? raw.title ?? raw.name ?? raw.SName ?? raw.Name ?? "").toString().trim();
+
+  // 圖片欄位：filelist 最常見；沒有就回退到 files
   let firstImage = null;
-  if (raw.filelist) firstImage = pickFirstImageFromFilelist(raw.filelist);
-  else if (raw.files) firstImage = pickFirstImageFromFilelist(String(raw.files));
+  if (raw.filelist) {
+    firstImage = pickFirstImageFromFilelist(raw.filelist);
+  } else if (raw.files) {
+    firstImage = pickFirstImageFromFilelist(String(raw.files));
+  }
+
   return { name, firstImage };
 }
+
 
 // 清空容器
 function clearChildren(node){ while (node.firstChild) node.removeChild(node.firstChild); }
@@ -400,6 +414,25 @@ function renderBlocks(items){
   });
 }
 
+const mergedRaw = await loadWithFallback();
+const normalizedAll = mergedRaw.map(normalizeItem);
+
+// 🚦 過濾掉沒有 name 的資料，避免出現空字串
+const attractions = normalizedAll.filter(x => x.name && x.name.length > 0);
+
+console.log("✅ 可用筆數：", attractions.length, "範例：", attractions[0]);
+
+const top3  = attractions.slice(0, 3);
+const next10 = attractions.slice(3, 13);
+
+renderBars(top3);
+renderBlocks(next10);
+
+// 方便你在 Console 檢查
+window.__merged = mergedRaw;
+window.__norm   = attractions;
+
+  
 // 主流程：GitHub Pages 上執行
 document.addEventListener("DOMContentLoaded", async () => {
   try {
