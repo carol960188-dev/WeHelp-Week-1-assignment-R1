@@ -288,32 +288,37 @@
   
 
 <script>
-// 來源（先用你能開的 Raw）
+// ===== Task 3：資料抓取與渲染（GitHub Pages 版，含 CORS 友善來源） =====
+
+// 優先使用「Jina 代理」（寬鬆 CORS），再退回 jsDelivr
 const SOURCES = [
   [
-    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-1",
-    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-2",
-  ]
+    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-1",
+    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-2",
+  ],
+  [
+    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
+    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-2",
+  ],
 ];
 
-// 讀取並「解包」為陣列：同時支援 [ ... ] 或 { rows: [ ... ] } / { result:{ results:[...] } }
+// 讀取並「解包」為陣列：支援 [ ... ] 或 { rows:[ ... ] } / { result:{ results:[ ... ] } }
 async function fetchToArray(url){
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const text = (await res.text()).trim();
-  // 先 parse，因為有時可能是物件包陣列
   let json;
   try { json = JSON.parse(text); }
-  catch { throw new Error("JSON parse 失敗（前 60 字）： " + text.slice(0,60)); }
+  catch { throw new Error("JSON parse 失敗（前 80 字）： " + text.slice(0,80)); }
 
-  // 轉成陣列：支援多種常見包裝
   if (Array.isArray(json)) return json;
-  if (Array.isArray(json.rows)) return json.rows;                         // 你現在看到的格式
-  if (json.result && Array.isArray(json.result.results)) return json.result.results;
-  if (json.data && Array.isArray(json.data)) return json.data;
-  throw new Error("找不到陣列（rows / result.results），實際 keys: " + Object.keys(json).join(","));
+  if (json && Array.isArray(json.rows)) return json.rows;                       // 你現在看到的格式
+  if (json?.result && Array.isArray(json.result.results)) return json.result.results;
+  if (json?.data && Array.isArray(json.data)) return json.data;
+  throw new Error("找不到陣列（rows / result.results / data）。keys: " + Object.keys(json).join(","));
 }
 
+// 逐組來源嘗試：成功就回傳合併陣列
 async function loadWithFallback(){
   let lastErr;
   for (const pair of SOURCES) {
@@ -329,16 +334,79 @@ async function loadWithFallback(){
   throw lastErr || new Error("無可用來源");
 }
 
-// ===== 下面保留你原本的 normalizeItem / renderBars / renderBlocks =====
+// 從長字串中挑第一張圖片（.jpg/.png）
+function pickFirstImageFromFilelist(str){
+  if (typeof str !== "string") return null;
+  // filelist 可能是「URL URL URL...」或分號/空白分隔
+  const m = str.match(/https?:\/\/[^\s'";]+?\.(?:jpg|jpeg|png)/i);
+  return m ? m[0] : null;
+}
 
-// 主流程
+// 正規化 -> { name, firstImage }
+function normalizeItem(raw){
+  const name = raw.stitle || raw.title || raw.name || "";
+  // 作業提供的資料多半用 filelist 存圖片清單
+  let firstImage = null;
+  if (raw.filelist) firstImage = pickFirstImageFromFilelist(raw.filelist);
+  else if (raw.files) firstImage = pickFirstImageFromFilelist(String(raw.files));
+  return { name, firstImage };
+}
+
+// 清空容器
+function clearChildren(node){ while (node.firstChild) node.removeChild(node.firstChild); }
+
+// Bars：更新 #bar1~#bar3
+function renderBars(items){
+  const ids = ["bar1","bar2","bar3"];
+  ids.forEach((id, i) => {
+    const el = document.getElementById(id); if (!el) return;
+    const img = el.querySelector("img");
+    const title = el.querySelector(".bar-title");
+    const data = items[i]; if (!data) return;
+    if (img && data.firstImage) img.src = data.firstImage;
+    if (title) title.textContent = data.name || "";
+  });
+}
+
+// Blocks：.blocks 內動態建立 10 張 .card（僅在有資料時覆蓋）
+function renderBlocks(items){
+  const root = document.querySelector(".blocks");
+  if (!root || !items?.length) return;
+
+  clearChildren(root);
+
+  items.forEach((it) => {
+    const card = document.createElement("div"); card.className = "card";
+
+    const bg = document.createElement("div"); bg.className = "card-bg";
+    if (it.firstImage) bg.style.backgroundImage = `url('${it.firstImage}')`;
+
+    const star = document.createElement("div"); star.className = "star"; star.setAttribute("data-active","false");
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox","0 0 24 24");
+    svg.setAttribute("fill","none");
+    svg.setAttribute("stroke","#0f172a");
+    svg.setAttribute("stroke-width","1.5");
+    const path = document.createElementNS(svgNS, "path");
+    path.setAttribute("d","M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.62L12 2 9.19 8.62 2 9.24l5.46 4.73L5.82 21z");
+    svg.appendChild(path);
+    star.appendChild(svg);
+
+    const cap = document.createElement("div"); cap.className = "caption"; cap.textContent = it.name || "";
+
+    card.appendChild(bg); card.appendChild(star); card.appendChild(cap);
+    root.appendChild(card);
+  });
+}
+
+// 主流程：GitHub Pages 上執行
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    if (location.protocol === "file:") {
-      console.warn("⚠️ 請用 Live Server（http://localhost:...）開啟，以避免 file:// 限制。");
-    }
+    console.log("⏳ 嘗試載入遠端資料（適用 GitHub Pages + CORS）…");
     const mergedRaw = await loadWithFallback();
     window.__merged = mergedRaw; // 方便 Console 驗證
+    console.log("✅ 合併後總筆數：", mergedRaw.length, "第一筆原始：", mergedRaw[0]);
 
     const attractions = mergedRaw.map(normalizeItem);
     const top3 = attractions.slice(0, 3);
@@ -352,3 +420,4 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 </script>
+
