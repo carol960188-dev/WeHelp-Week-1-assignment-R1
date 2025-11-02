@@ -344,10 +344,15 @@ function normalizeItem(raw, idx){
 
   // 2️⃣ 圖片：從 filelist 或其他欄位找出第一張圖
   let firstImage = null;
-  if (raw.filelist) {
-    const match = raw.filelist.match(/https?:\/\/[^\s'"]+\.(jpg|jpeg|png)/i);
-    if (match) firstImage = match[0].replace(/^http:\/\//, "https://");
+  
+  if (raw.filelist && typeof raw.filelist === "string") {
+  // 有時 filelist 是多張圖片以逗號分隔
+  const parts = raw.filelist.split(/[,;]/);
+  const first = parts.find(p => p.match(/\.(jpg|jpeg|png)$/i));
+  if (first) {
+    firstImage = first.trim().replace(/^http:\/\//, "https://");
   }
+}
 
   // 沒圖 → picsum 佔位圖
   if (!firstImage) {
