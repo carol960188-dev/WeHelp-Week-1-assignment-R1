@@ -316,7 +316,7 @@ async function fetchToArray(url){
   if (json?.data && Array.isArray(json.data)) return json.data;
   throw new Error("不是可辨識的陣列格式，keys=" + Object.keys(json).join(","));
 }
-</script>
+
 
 
 async function loadWithFallback(){
