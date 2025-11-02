@@ -286,7 +286,7 @@
 
 
 <script>
-// ===== Task 3（最終修正版：支援舊資料欄位 sname / filelist）=====
+// ===== Task 3（最終版：合併兩來源，名稱對應圖片）=====
 const ENDPOINTS_PAIRS = [
   [
     "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
@@ -298,73 +298,93 @@ const ENDPOINTS_PAIRS = [
   ],
 ];
 
-// --- 抓資料並轉成陣列 ---
+// -- 讀並轉陣列（相容多種包裝），清掉 BOM --
 async function fetchToArray(url){
   const res = await fetch(url, { cache:"no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  const txt = (await res.text()).trim();
-  const clean = txt.replace(/^\uFEFF/, ""); // 去掉 BOM
-  let json;
-  try { json = JSON.parse(clean); }
-  catch { throw new Error("JSON parse 失敗（前80字）：" + clean.slice(0,80)); }
-
+  const txt = (await res.text()).replace(/^\uFEFF/,"").trim();
+  let json; try{ json = JSON.parse(txt); }catch{
+    throw new Error("JSON parse 失敗（前80字）：" + txt.slice(0,80));
+  }
   if (Array.isArray(json)) return json;
-  if (json && Array.isArray(json.rows)) return json.rows;
-  if (json?.result && Array.isArray(json.result.results)) return json.result.results;
+  if (json?.rows && Array.isArray(json.rows)) return json.rows;
+  if (json?.result?.results && Array.isArray(json.result.results)) return json.result.results;
   if (json?.data && Array.isArray(json.data)) return json.data;
-  throw new Error("不是可辨識的陣列格式，keys=" + Object.keys(json).join(","));
+  throw new Error("未知格式 keys=" + Object.keys(json).join(","));
 }
 
-// --- 備援機制：先試 jsDelivr，再試 raw.githubusercontent ---
-async function loadWithFallback(){
+// -- 逐組來源載入：同時抓兩份（名稱/圖片），失敗就換下一組 --
+async function loadPair(){
   let lastErr;
   for (const pair of ENDPOINTS_PAIRS){
     try{
-      const [a,b] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
-      console.log("✅ 成功載入來源：", pair[0], "與", pair[1], "各", a.length, b.length);
-      return a.concat(b);
+      const [A, B] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
+      console.log("✅ 成功來源：", pair[0], pair[1], "各", A.length, B.length);
+      return {A, B};
     }catch(e){
-      console.warn("⚠️ 載入失敗，改試下一組：", e.message);
+      console.warn("⚠️ 來源失敗，改試下一組：", e.message);
       lastErr = e;
     }
   }
   throw lastErr || new Error("無可用來源");
 }
 
-// --- 解析出名稱與第一張圖片 ---
-function normalizeItem(raw, idx){
-  // 1️⃣ 名稱：優先 sname，其次 stitle/title/name
-  const name = (
-    raw.sname ??
-    raw.stitle ??
-    raw.title ??
-    raw.name ??
-    `景點 ${idx+1}`
-  ).toString().trim();
+// -- 工具：名稱與圖片解析 --
+const getName = (raw, idx=0) =>
+  (raw.sname ?? raw.stitle ?? raw.title ?? raw.name ?? `景點 ${idx+1}`).toString().trim();
 
-  // 2️⃣ 圖片：從 filelist 或其他欄位找出第一張圖
-  let firstImage = null;
-  
-  if (raw.filelist && typeof raw.filelist === "string") {
-  // 有時 filelist 是多張圖片以逗號分隔
-  const parts = raw.filelist.split(/[,;]/);
-  const first = parts.find(p => p.match(/\.(jpg|jpeg|png)$/i));
-  if (first) {
-    firstImage = first.trim().replace(/^http:\/\//, "https://");
-  }
+function firstImageFromFilelist(str){
+  if (typeof str !== "string" || !str) return null;
+  // filelist 可能用逗號或分號隔開，取第一個 jpg/png；並將 http 升級成 https
+  const parts = str.split(/[,;]\s*/);
+  const first = parts.find(p => /\.(jpg|jpeg|png)(\?|#|$)/i.test(p));
+  if (!first) return null;
+  return first.trim().replace(/^http:\/\//i, "https://");
 }
 
-  // 沒圖 → picsum 佔位圖
-  if (!firstImage) {
-    firstImage = `https://picsum.photos/seed/tt-${idx+1}/800/600`;
+// -- 把有 filelist 的資料做成「名稱→圖片」對照表 --
+function buildImageMap(arr){
+  const map = new Map();
+  for (const r of arr){
+    const name = getName(r);
+    const img = firstImageFromFilelist(r.filelist || r.files || "");
+    if (name && img && !map.has(name)) map.set(name, img);
   }
-
-  return { name, firstImage };
+  return map;
 }
 
-// --- DOM 工具 ---
+// -- 產生最後渲染清單：優先使用有圖的項目，避免重複名稱 --
+function buildItems(A, B){
+  // 嘗試以 B 建圖（若 B 無圖，A 也會掃一次）
+  const mapB = buildImageMap(B);
+  const mapA = buildImageMap(A);
+  const imgMap = new Map([...mapB, ...mapA]); // B 優先，再以 A 補齊
+
+  const seen = new Set();
+  const items = [];
+
+  const pushFrom = (src) => {
+    src.forEach((r, i) => {
+      const name = getName(r, i);
+      if (!name || seen.has(name)) return;
+      let img = firstImageFromFilelist(r.filelist || r.files || "");
+      if (!img) img = imgMap.get(name) || null;
+      // 沒圖就給佔位，確保版面完整
+      if (!img) img = `https://picsum.photos/seed/tt-${items.length+1}/800/600`;
+      items.push({ name, firstImage: img });
+      seen.add(name);
+    });
+  };
+
+  // 先從「比較可能有圖的來源」推，另一個補齊
+  pushFrom(B);
+  pushFrom(A);
+
+  return items;
+}
+
+// -- DOM helpers（沿用你原本的）--
 function clearChildren(node){ while(node.firstChild) node.removeChild(node.firstChild); }
-
 function renderBars(items){
   ["bar1","bar2","bar3"].forEach((id,i)=>{
     const el = document.getElementById(id); if(!el) return;
@@ -375,7 +395,6 @@ function renderBars(items){
     if (title) title.textContent = d.name || `景點 ${i+1}`;
   });
 }
-
 function renderBlocks(items){
   const root = document.querySelector(".blocks"); if(!root || !items?.length) return;
   clearChildren(root);
@@ -390,20 +409,17 @@ function renderBlocks(items){
   });
 }
 
-// --- 主流程 ---
+// -- 主流程 --
 document.addEventListener("DOMContentLoaded", async ()=>{
   try{
     console.log("⏳ 正在載入台北景點資料…");
-    const raw = await loadWithFallback();
-    const normAll = raw.map((x,i)=>normalizeItem(x,i));
-    window.__norm = normAll; // 方便你在 console 驗證
+    const {A, B} = await loadPair();     // A、B 兩份來源
+    const all = buildItems(A, B);        // 依名稱合併並套圖
+    window.__norm = all;                 // 給你 Console 檢查
 
-    const top3  = normAll.slice(0,3);
-    const next10 = normAll.slice(3,13);
-    renderBars(top3);
-    renderBlocks(next10);
-
-    console.log("🎉 渲染完成，共", normAll.length, "筆景點");
+    renderBars(all.slice(0,3));
+    renderBlocks(all.slice(3,13));
+    console.log("🎉 渲染完成，共", all.length, "筆；示例：", all[0]);
   }catch(e){
     console.error("❌ 載入景點資料失敗：", e);
   }
