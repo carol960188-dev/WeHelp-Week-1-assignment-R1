@@ -285,34 +285,39 @@
   </script>
 
 
-<script>
+
 // ===== Task 3（GitHub Pages OK + 圖片 http→https 修正 + 佔位圖）=====
+<script>
+// --- 只用可跨網域的來源：先 jsDelivr，失敗再 raw.githubusercontent ---
 const ENDPOINTS_PAIRS = [
-  [
-    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-1",
-    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-2",
-  ],
   [
     "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
     "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-2",
   ],
+  [
+    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-1",
+    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-2",
+  ],
 ];
 
-// --- 抓資料並轉成陣列 ---
+// --- 抓資料並轉成陣列（加入 BOM 清理 & 多格式相容）---
 async function fetchToArray(url){
   const res = await fetch(url, { cache:"no-store" });
-  if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const txt = (await res.text()).trim();
+  const clean = txt.replace(/^\uFEFF/, ""); // 移除可能的 BOM
   let json;
-  try { json = JSON.parse(txt); }
-  catch { throw new Error("JSON parse 失敗（前80字）：" + txt.slice(0,80)); }
+  try { json = JSON.parse(clean); }
+  catch { throw new Error("JSON parse 失敗（前80字）：" + clean.slice(0,80)); }
 
   if (Array.isArray(json)) return json;
-  if (json && Array.isArray(json.rows)) return json.rows;
-  if (json?.result && Array.isArray(json.result.results)) return json.result.results;
+  if (json && Array.isArray(json.rows)) return json.rows;                       // {rows:[...]}
+  if (json?.result && Array.isArray(json.result.results)) return json.result.results; // CKAN 類
   if (json?.data && Array.isArray(json.data)) return json.data;
   throw new Error("不是可辨識的陣列格式，keys=" + Object.keys(json).join(","));
 }
+</script>
+
 
 async function loadWithFallback(){
   let lastErr;
