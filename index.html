@@ -284,64 +284,82 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   </script>
 
-  
-  
-
-
 <script>
-// ===== Task 3=====
-const SOURCES = [
+// ===== Task 3（GitHub Pages 友善：Jina → jsDelivr 備援）=====
+const ENDPOINTS_PAIRS = [
   [
-    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-1",
-    "https://raw.githubusercontent.com/cwpeng/test/master/assignment-3-2",
+    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-1",
+    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-2",
   ],
-  
+  [
+    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
+    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-2",
+  ],
 ];
 
-// 轉成「陣列」
+// 讀並轉為「陣列」：支援 [ ... ]、{ rows:[ ... ] }、{ result:{ results:[ ... ] } }
 async function fetchToArray(url){
   const res = await fetch(url, { cache:"no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const txt = (await res.text()).trim();
-  let json; try{ json = JSON.parse(txt); }catch{ throw new Error("JSON parse 失敗"); }
+  let json;
+  try { json = JSON.parse(txt); }
+  catch { throw new Error("JSON parse 失敗（前 80 字）：" + txt.slice(0,80)); }
+
   if (Array.isArray(json)) return json;
   if (json && Array.isArray(json.rows)) return json.rows;
   if (json?.result && Array.isArray(json.result.results)) return json.result.results;
-  throw new Error("回應不是可辨識的陣列格式");
+  if (json?.data && Array.isArray(json.data)) return json.data;
+  throw new Error("不是可辨識的陣列格式，keys=" + Object.keys(json).join(","));
 }
 
+// 逐組來源嘗試：成功即回傳合併陣列
 async function loadWithFallback(){
   let lastErr;
-  for (const pair of SOURCES){
+  for (const pair of ENDPOINTS_PAIRS){
     try{
       const [a,b] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
-      console.log("✅ 來源成功", pair[0], pair[1], a.length, b.length);
+      console.log("✅ 來源成功：", pair[0], "與", pair[1], "各", a.length, b.length);
       return a.concat(b);
-    }catch(e){ console.warn("⚠️ 失敗改試下一組：", e.message); lastErr = e; }
+    }catch(e){
+      console.warn("⚠️ 來源失敗，改試下一組：", e.message);
+      lastErr = e;
+    }
   }
   throw lastErr || new Error("無可用來源");
 }
 
-// 取第一張圖
+// 取第一張圖（從 filelist/連續網址抓第一個 .jpg/.png）
 function pickFirstImage(str){
   if(typeof str!=="string") return null;
   const m = str.match(/https?:\/\/[^\s'";]+?\.(?:jpg|jpeg|png)/i);
   return m ? m[0] : null;
 }
 
-
+// 正規化：盡可能抓到 name 與 image
 function normalizeItem(raw){
-  const name = (raw.stitle ?? raw.title ?? raw.name ?? "").toString().trim();
+  const name =
+    (raw.stitle ?? raw.title ?? raw.name ?? raw.SName ?? raw.Name ?? raw.名稱 ?? "")
+      .toString().trim();
+
   let firstImage = null;
-  if (raw.filelist) firstImage = pickFirstImage(raw.filelist);
-  else if (raw.files) firstImage = pickFirstImage(String(raw.files));
+  if (raw.filelist)      firstImage = pickFirstImage(raw.filelist);
+  else if (raw.files)    firstImage = pickFirstImage(String(raw.files));
+  if (!firstImage){
+    for (const k in raw){
+      if (typeof raw[k] === "string"){
+        const hit = pickFirstImage(raw[k]);
+        if (hit){ firstImage = hit; break; }
+      }
+    }
+  }
   return { name, firstImage };
 }
 
 // 清空
 function clearChildren(node){ while(node.firstChild) node.removeChild(node.firstChild); }
 
-// Bars
+// Bars：#bar1~#bar3
 function renderBars(items){
   ["bar1","bar2","bar3"].forEach((id,i)=>{
     const el = document.getElementById(id); if(!el) return;
@@ -349,43 +367,47 @@ function renderBars(items){
     const title = el.querySelector(".bar-title");
     const d = items[i]; if(!d) return;
     if (img && d.firstImage) img.src = d.firstImage;
-    if (title) title.textContent = d.name || "";
+    if (title) title.textContent = d.name || (`景點 ${i+1}`);
   });
 }
 
-// Blocks
+// Blocks：成功拿到資料才覆蓋 demo
 function renderBlocks(items){
   const root = document.querySelector(".blocks"); if(!root || !items?.length) return;
   clearChildren(root);
-  items.forEach(d=>{
+  items.forEach((d,i)=>{
     const card = document.createElement("div"); card.className="card";
     const bg = document.createElement("div"); bg.className="card-bg";
     if (d.firstImage) bg.style.backgroundImage = `url('${d.firstImage}')`;
     const star = document.createElement("div"); star.className="star"; star.setAttribute("data-active","false");
-    const cap = document.createElement("div"); cap.className="caption"; cap.textContent = d.name || "";
+    const cap = document.createElement("div"); cap.className="caption"; cap.textContent = d.name || `景點 ${i+1}`;
     card.appendChild(bg); card.appendChild(star); card.appendChild(cap);
     root.appendChild(card);
   });
 }
 
+// 主流程
 document.addEventListener("DOMContentLoaded", async ()=>{
   try{
     console.log("⏳ Task3 on GitHub Pages…");
     const raw = await loadWithFallback();
-    const normAll = raw.map(normalizeItem).filter(x=>x.name);
+    const normAll = raw.map(normalizeItem).map((x,i)=>({
+      name: x.name && x.name.length ? x.name : `景點 ${i+1}`,
+      firstImage: x.firstImage || null,
+    }));
+    window.__norm = normAll; // 方便 Console 驗證
+
     const top3  = normAll.slice(0,3);
     const next10 = normAll.slice(3,13);
     renderBars(top3);
     renderBlocks(next10);
-    // for debug
-    window.__norm = normAll;
+
     console.log("🎉 渲染完成", {bars: top3.length, blocks: next10.length, first: normAll[0]});
   }catch(e){
     console.error("❌ 載入景點資料失敗：", e);
   }
 });
 </script>
-
 
  
 </body>
