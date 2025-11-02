@@ -286,7 +286,7 @@
 
 
 <script>
-// ===== Task 3（最終版：合併兩來源，名稱對應圖片）=====
+// ===== Task 3 – 最終穩定版 =====
 const ENDPOINTS_PAIRS = [
   [
     "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
@@ -298,29 +298,27 @@ const ENDPOINTS_PAIRS = [
   ],
 ];
 
-// -- 讀並轉陣列（相容多種包裝），清掉 BOM --
+// ---- 讀檔並還原成陣列（rows 也支援），清除 BOM ----
 async function fetchToArray(url){
   const res = await fetch(url, { cache:"no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  const txt = (await res.text()).replace(/^\uFEFF/,"").trim();
-  let json; try{ json = JSON.parse(txt); }catch{
-    throw new Error("JSON parse 失敗（前80字）：" + txt.slice(0,80));
-  }
+  const txt = (await res.text()).replace(/^\uFEFF/,'').trim();
+  let json;
+  try { json = JSON.parse(txt); }
+  catch { throw new Error("JSON parse 失敗（前80字）：" + txt.slice(0,80)); }
   if (Array.isArray(json)) return json;
-  if (json?.rows && Array.isArray(json.rows)) return json.rows;
-  if (json?.result?.results && Array.isArray(json.result.results)) return json.result.results;
-  if (json?.data && Array.isArray(json.data)) return json.data;
+  if (json && Array.isArray(json.rows)) return json.rows;
   throw new Error("未知格式 keys=" + Object.keys(json).join(","));
 }
 
-// -- 逐組來源載入：同時抓兩份（名稱/圖片），失敗就換下一組 --
+// ---- 一次抓兩個來源；一組失敗就試下一組 ----
 async function loadPair(){
   let lastErr;
   for (const pair of ENDPOINTS_PAIRS){
     try{
-      const [A, B] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
-      console.log("✅ 成功來源：", pair[0], pair[1], "各", A.length, B.length);
-      return {A, B};
+      const [A,B] = await Promise.all([fetchToArray(pair[0]), fetchToArray(pair[1])]);
+      console.log("✅ 成功來源：", pair[0], "與", pair[1], "各", A.length, B.length);
+      return {A,B, src: pair};
     }catch(e){
       console.warn("⚠️ 來源失敗，改試下一組：", e.message);
       lastErr = e;
@@ -329,61 +327,85 @@ async function loadPair(){
   throw lastErr || new Error("無可用來源");
 }
 
-// -- 工具：名稱與圖片解析 --
-const getName = (raw, idx=0) =>
-  (raw.sname ?? raw.stitle ?? raw.title ?? raw.name ?? `景點 ${idx+1}`).toString().trim();
-
-function firstImageFromFilelist(str){
+// ---- 名稱與圖片抽取工具 ----
+const getName = (raw) => {
+  const n = (raw?.sname ?? raw?.stitle ?? raw?.title ?? raw?.name ?? "").toString().trim();
+  return n || null;
+};
+function firstImageFromList(str){
   if (typeof str !== "string" || !str) return null;
-  // filelist 可能用逗號或分號隔開，取第一個 jpg/png；並將 http 升級成 https
+  // 可能逗號/分號分隔；挑第一個圖檔
   const parts = str.split(/[,;]\s*/);
-  const first = parts.find(p => /\.(jpg|jpeg|png)(\?|#|$)/i.test(p));
-  if (!first) return null;
-  return first.trim().replace(/^http:\/\//i, "https://");
+  const hit = parts.find(p => /\.(jpg|jpeg|png)(\?|#|$)/i.test(p));
+  if (!hit) return null;
+  return hit.trim().replace(/^http:\/\//i, "https://");
+}
+// 萬一沒有 filelist/files，就掃描所有字串欄位
+function firstImageFromAny(raw){
+  for (const k in raw){
+    const v = raw[k];
+    if (typeof v === "string"){
+      const m = v.match(/https?:\/\/[^\s'";)]+?\.(jpg|jpeg|png)(\?[^\s'"]*)?/i);
+      if (m) return m[0].replace(/^http:\/\//i, "https://");
+    }
+  }
+  return null;
 }
 
-// -- 把有 filelist 的資料做成「名稱→圖片」對照表 --
+// ---- 從陣列建立「名稱→圖片」對照表（大小寫、空白正規化）----
+const normKey = (s) => s ? s.trim().toLowerCase() : "";
 function buildImageMap(arr){
   const map = new Map();
-  for (const r of arr){
+  for(const r of arr){
     const name = getName(r);
-    const img = firstImageFromFilelist(r.filelist || r.files || "");
-    if (name && img && !map.has(name)) map.set(name, img);
+    if (!name) continue;
+    let img = firstImageFromList(r.filelist || r.files || "");
+    if (!img) img = firstImageFromAny(r);
+    if (img && !map.has(normKey(name))) {
+      map.set(normKey(name), img);
+    }
   }
   return map;
 }
 
-// -- 產生最後渲染清單：優先使用有圖的項目，避免重複名稱 --
-function buildItems(A, B){
-  // 嘗試以 B 建圖（若 B 無圖，A 也會掃一次）
-  const mapB = buildImageMap(B);
-  const mapA = buildImageMap(A);
-  const imgMap = new Map([...mapB, ...mapA]); // B 優先，再以 A 補齊
+// ---- 合併 A/B：優先使用有圖片的對照表，把圖片套回只有名稱的那份 ----
+function mergeByName(A,B){
+  const imgMapB = buildImageMap(B);
+  const imgMapA = buildImageMap(A);
+  const imgMap = new Map([...imgMapB, ...imgMapA]); // 先 B 後 A
 
   const seen = new Set();
-  const items = [];
+  const out = [];
 
-  const pushFrom = (src) => {
-    src.forEach((r, i) => {
-      const name = getName(r, i);
-      if (!name || seen.has(name)) return;
-      let img = firstImageFromFilelist(r.filelist || r.files || "");
-      if (!img) img = imgMap.get(name) || null;
-      // 沒圖就給佔位，確保版面完整
-      if (!img) img = `https://picsum.photos/seed/tt-${items.length+1}/800/600`;
-      items.push({ name, firstImage: img });
-      seen.add(name);
-    });
-  };
+  // 先推 B（通常圖比較多）
+  for (const r of B){
+    const name = getName(r);
+    if (!name) continue;
+    const key = normKey(name);
+    if (seen.has(key)) continue;
+    let img = firstImageFromList(r.filelist || r.files || "") || imgMap.get(key);
+    if (!img) img = firstImageFromAny(r);
+    if (!img) img = `https://picsum.photos/seed/tt-${out.length+1}/800/600`;
+    out.push({ name, firstImage: img });
+    seen.add(key);
+  }
 
-  // 先從「比較可能有圖的來源」推，另一個補齊
-  pushFrom(B);
-  pushFrom(A);
-
-  return items;
+  // 再補 A（避免重複）
+  for (const r of A){
+    const name = getName(r);
+    if (!name) continue;
+    const key = normKey(name);
+    if (seen.has(key)) continue;
+    let img = firstImageFromList(r.filelist || r.files || "") || imgMap.get(key);
+    if (!img) img = firstImageFromAny(r);
+    if (!img) img = `https://picsum.photos/seed/tt-${out.length+1}/800/600`;
+    out.push({ name, firstImage: img });
+    seen.add(key);
+  }
+  return out;
 }
 
-// -- DOM helpers（沿用你原本的）--
+// ---- DOM 渲染（沿用你的結構）----
 function clearChildren(node){ while(node.firstChild) node.removeChild(node.firstChild); }
 function renderBars(items){
   ["bar1","bar2","bar3"].forEach((id,i)=>{
@@ -409,23 +431,26 @@ function renderBlocks(items){
   });
 }
 
-// -- 主流程 --
+// ---- 主流程 ----
 document.addEventListener("DOMContentLoaded", async ()=>{
   try{
-    console.log("⏳ 正在載入台北景點資料…");
-    const {A, B} = await loadPair();     // A、B 兩份來源
-    const all = buildItems(A, B);        // 依名稱合併並套圖
-    window.__norm = all;                 // 給你 Console 檢查
+    console.log("⏳ 載入台北景點資料中…");
+    const {A,B,src} = await loadPair();
+    console.log("🔎 A[0] keys:", Object.keys(A[0]||{}));
+    console.log("🔎 B[0] keys:", Object.keys(B[0]||{}));
 
-    renderBars(all.slice(0,3));
-    renderBlocks(all.slice(3,13));
-    console.log("🎉 渲染完成，共", all.length, "筆；示例：", all[0]);
+    const items = mergeByName(A,B);
+    window.__norm = items;  // 方便 Console 檢查
+    console.log("📦 合併後筆數：", items.length, " 來源：", src);
+
+    renderBars(items.slice(0,3));
+    renderBlocks(items.slice(3,13));
+    console.log("🎉 渲染完成。示例：", items.slice(0,5));
   }catch(e){
-    console.error("❌ 載入景點資料失敗：", e);
+    console.error("❌ 載入/解析失敗：", e);
   }
 });
 </script>
-
 
  
 </body>
