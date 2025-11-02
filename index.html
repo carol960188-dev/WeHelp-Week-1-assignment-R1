@@ -454,3 +454,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 </script>
 
+  <script>
+  console.log("✅ Sanity check: Task3 script is RUNNING at", new Date().toISOString());
+  const t = document.querySelector('#bar1 .bar-title');
+  if (t) {
+    t.textContent = "✅ JS 已載入（這行若看得到，代表你的最新腳本真的有跑）";
+  } else {
+    console.log("⚠️ 找不到 #bar1 .bar-title");
+  }
+</script>
+
+</body>
+</html>
