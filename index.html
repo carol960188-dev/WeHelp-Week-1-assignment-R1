@@ -289,19 +289,16 @@
 
 
 <script>
-// ===== Task 3（GitHub Pages 友善：Jina 代理 → jsDelivr 備援）=====
+// ===== Task 3=====
 const SOURCES = [
   [
-    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-1",
-    "https://r.jina.ai/http://cwpeng.github.io/test/assignment-3-2",
+    "https://cwpeng.github.io/test/assignment-3-1",
+    "https://cwpeng.github.io/test/assignment-3-2",
   ],
-  [
-    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-1",
-    "https://cdn.jsdelivr.net/gh/cwpeng/test@master/assignment-3-2",
-  ],
+  
 ];
 
-// 讀並轉成「陣列」：支援 [ ... ]、{ rows:[ ... ] }、{ result:{ results:[ ... ] } }
+// 轉成「陣列」
 async function fetchToArray(url){
   const res = await fetch(url, { cache:"no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
@@ -325,14 +322,14 @@ async function loadWithFallback(){
   throw lastErr || new Error("無可用來源");
 }
 
-// 取第一張圖（從 filelist/連續網址中抓第一個 .jpg/.png）
+// 取第一張圖
 function pickFirstImage(str){
   if(typeof str!=="string") return null;
   const m = str.match(/https?:\/\/[^\s'";]+?\.(?:jpg|jpeg|png)/i);
   return m ? m[0] : null;
 }
 
-// 正規化：明確支援 stitle + filelist
+
 function normalizeItem(raw){
   const name = (raw.stitle ?? raw.title ?? raw.name ?? "").toString().trim();
   let firstImage = null;
@@ -356,7 +353,7 @@ function renderBars(items){
   });
 }
 
-// Blocks（成功拿到資料才覆蓋 demo）
+// Blocks
 function renderBlocks(items){
   const root = document.querySelector(".blocks"); if(!root || !items?.length) return;
   clearChildren(root);
